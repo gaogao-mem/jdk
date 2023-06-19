@@ -198,7 +198,7 @@ class ElfFile: public CHeapObj<mtInternal> {
   // On systems other than linux it always returns false.
   static bool specifies_noexecstack(const char* filepath) NOT_LINUX({ return false; });
 
-  bool get_source_info(uint32_t offset_in_library, char* filename, size_t filename_len, int* line, bool is_pc_after_call);
+  bool get_source_info(uint32_t offset_in_library, char* buf, int buflen, bool is_pc_after_call);
 
  private:
   // sanity check, if the file is a real elf file
@@ -350,34 +350,37 @@ class ElfFile: public CHeapObj<mtInternal> {
  *                   filename and line number (among other information) for a specific offset in the associated ELF library
  *                   file. The state machine is executed until the row for the requested offset is found. The filename and
  *                   line number information can then be fetched with the current register values of the state machine.
+ * - .debug_ranges:  Contains range list for compilation unit and DIE. Which is pointed by the attribute DW_AT_stmt_list.
+ * - .debug_str:     Contains the string in the DWARF file. Which is pointed by the form DW_FORM_strp.
  *
  * Algorithm
  * ---------
  * Given: Offset into the ELF file library.
- * Return: Filename and line number for this offset.
+ * Return: The source info of inline function stack including filename and line number.
  * (1) First, the path to the .debuginfo DWARF file is found by inspecting the .gnu_debuglink section of the library file.
  *     The DWARF file is then opened by calling the constructor of this class. Once this is done, the processing of the
- *     DWARF file is initiated by calling find_filename_and_line_number().
+ *     DWARF file is initiated by calling get_source_info().
  * (2) Find the compilation unit offset by reading entries from the section .debug_aranges, which contain address range
  *     descriptors, until we find the correct descriptor that includes the library offset.
- * (3) Find the .debug_line offset for the line number information program from the .debug_info section:
+ * (3) Initialize the compilation uint.
  *     (a) Parse the compilation unit header from the .debug_info section at the offset obtained by (2).
  *     (b) Read the debug_abbrev_offset into the .debug_abbrev section that belongs to this compilation unit from the
  *         header obtained in (3a).
- *     (c) Read the abbreviation code that immediately follows the compilation unit header from (3a) which is needed to
- *         find the correct entry in the .debug_abbrev section.
- *     (d) Find the correct entry in the abbreviation table in the .debug_abbrev section by starting to parse entries at
- *         the debug_abbrev_offset from (3b) until we find the correct one matching the abbreviation code from (3c).
- *     (e) Read the specified attributes of the abbreviation entry from (3d) from the compilation unit (in the .debug_info
- *         section) until we find the attribute DW_AT_stmt_list. This attributes represents an offset into the .debug_line
- *         section which contains the line number program information to get the filename and the line number.
- *  (4) Find the filename and line number belonging to the given library offset by running the line number program state
- *      machine with its registers. This creates a matrix where each row stores information for specific addresses (library
- *      offsets). The state machine executes different opcodes which modify the state machine registers. Certain opcodes
- *      will add a new row to the matrix by taking the current values of state machine registers. As soon as the correct
- *      matrix row matching the library offset is found, we can read the line number from the line register of the state
- *      machine and parse the filename from the line number program header with the given file index from the file register
- *      of the state machine.
+ * (4) Get the top DIE of the compilation unit and initialize the DIE.
+ *     (a) Set the max pos of reader.
+ *     (b) Read the abbreviation code that at the start of the DIE which is needed to find the correct entry in the .debug_abbrev section.
+ *     (c) Find the correct entry in the abbreviation table in the .debug_abbrev section by starting to parse entries at
+ *         the debug_abbrev_offset from (3b) until we find the correct one matching the abbreviation code from (4b).
+ *     (d) Read the attributes of the abbreviation entry from (4c) from the DIE (in the .debug_info section), during this,
+ *         we can get the debug_line_offset of the compilation unit.
+ * (5) Traverse the children of DIE to get the inline source info by calling DwarfFile::DebuggingInfoEntry::get_inlined_info().
+ * (6) Find the innerest filename and line number belonging to the given library offset by running the line number program state
+ *     machine with its registers. This creates a matrix where each row stores information for specific addresses (library
+ *     offsets). The state machine executes different opcodes which modify the state machine registers. Certain opcodes
+ *     will add a new row to the matrix by taking the current values of state machine registers. As soon as the correct
+ *     matrix row matching the library offset is found, we can read the line number from the line register of the state
+ *     machine and parse the filename from the line number program header with the given file index from the file register
+ *     of the state machine.
  *
  *  More details about the different phases can be found at the associated classes and methods. A visualization of the
  *  algorithm inside the different sections can be found in the class comments for DebugAranges, DebugAbbrev and
@@ -391,7 +394,7 @@ class ElfFile: public CHeapObj<mtInternal> {
  *  - Level 2 (info):
  *    - Prints the found offsets of all DWARF sections
  *  - Level 3 (debug):
- *    - Prints the results of the steps (1) - (4) together with the generated line information matrix.
+ *    - Prints the results of the steps (1) - (6) together with the generated line information matrix.
  *  - Level 4 (trace):
  *    - Complete information about intermediate states/results when parsing the DWARF file.
  */
@@ -401,6 +404,63 @@ class DwarfFile : public ElfFile {
   // We only support 32-bit DWARF (emitted by GCC) which uses 32-bit values for DWARF section lengths and offsets
   // relative to the beginning of a section.
   static constexpr uint8_t DWARF_SECTION_OFFSET_SIZE = 4;
+  // The size of header of compilation unit
+  static constexpr uint8_t CU_HEADER_SIZE = 11;
+
+  // Tag encoding from Figure 18 in section 7.5 of the DWARF 4 spec.
+  static constexpr uint8_t DW_TAG_class_type = 0x02;
+  static constexpr uint8_t DW_TAG_compile_unit = 0x11;
+  static constexpr uint8_t DW_TAG_subprogram = 0x2e;
+  static constexpr uint64_t DW_TAG_GNU_call_site = 0x4109;
+
+  // Child determination encoding from Figure 19 in section 7.5 of the DWARF 4 spec.
+  static constexpr uint8_t DW_CHILDREN_yes = 0x01;
+
+  // Attribute encoding from Figure 20 in section 7.5 of the DWARF 4 spec.
+  static constexpr uint8_t DW_AT_sibling= 0x01;
+  static constexpr uint8_t DW_AT_name = 0x03;
+  static constexpr uint8_t DW_AT_stmt_list = 0x10;
+  static constexpr uint8_t DW_AT_low_pc= 0x11;
+  static constexpr uint8_t DW_AT_high_pc = 0x12;
+  static constexpr uint8_t DW_AT_abstract_origin = 0x31;
+  static constexpr uint8_t DW_AT_specification = 0x47;
+  static constexpr uint8_t DW_AT_entry_pc = 0x52;
+  static constexpr uint8_t DW_AT_ranges = 0x55;
+  static constexpr uint8_t DW_AT_call_file = 0x58;
+  static constexpr uint8_t DW_AT_call_line = 0x59;
+
+  // Attribute form encodings from Figure 21 in section 7.5 of the DWARF 4 spec.
+  static constexpr uint8_t DW_FORM_addr = 0x01; // address
+  static constexpr uint8_t DW_FORM_block2 = 0x03; // block
+  static constexpr uint8_t DW_FORM_block4 = 0x04; // block
+  static constexpr uint8_t DW_FORM_data2 = 0x05; // constant
+  static constexpr uint8_t DW_FORM_data4 = 0x06; // constant
+  static constexpr uint8_t DW_FORM_data8 = 0x07; // constant
+  static constexpr uint8_t DW_FORM_string = 0x08; // string
+  static constexpr uint8_t DW_FORM_block = 0x09; // block
+  static constexpr uint8_t DW_FORM_block1 = 0x0a; // block
+  static constexpr uint8_t DW_FORM_data1 = 0x0b; // constant
+  static constexpr uint8_t DW_FORM_flag = 0x0c; // flag
+  static constexpr uint8_t DW_FORM_sdata = 0x0d; // constant
+  static constexpr uint8_t DW_FORM_strp = 0x0e; // string
+  static constexpr uint8_t DW_FORM_udata = 0x0f; // constant
+  static constexpr uint8_t DW_FORM_ref_addr = 0x10; // reference0;
+  static constexpr uint8_t DW_FORM_ref1 = 0x11; // reference
+  static constexpr uint8_t DW_FORM_ref2 = 0x12; // reference
+  static constexpr uint8_t DW_FORM_ref4 = 0x13; // reference
+  static constexpr uint8_t DW_FORM_ref8 = 0x14; // reference
+  static constexpr uint8_t DW_FORM_ref_udata = 0x15; // reference
+  static constexpr uint8_t DW_FORM_indirect = 0x16; // see Section 7.5.3
+  static constexpr uint8_t DW_FORM_sec_offset = 0x17; // lineptr, loclistptr, macptr, rangelistptr
+  static constexpr uint8_t DW_FORM_exprloc = 0x18;// exprloc
+  static constexpr uint8_t DW_FORM_flag_present = 0x19; // flag
+  static constexpr uint8_t DW_FORM_ref_sig8 = 0x20; // reference
+
+  // The max length of read_string().
+  static const size_t STRING_BUF_LEN = 256;
+  static constexpr const char* overflow_msg = "<OVERFLOW>";
+  static constexpr const char minimal_overflow_msg = 'L';
+  static void write_buf(char* buf, int buflen, char* str);
 
   class MarkedDwarfFileReader : public MarkedFileReader {
    private:
@@ -414,6 +474,7 @@ class DwarfFile : public ElfFile {
     virtual bool set_position(long new_pos);
     long get_position() const { return _current_pos; }
     void set_max_pos(long max_pos) { _max_pos = max_pos; }
+    long get_max_pos(){ return _max_pos; }
     // Have we reached the limit of maximally allowable bytes to read? Used to ensure to stop reading when a section ends.
     bool has_bytes_left() const;
     // Call this if another file reader has changed the position of the same file handle.
@@ -491,7 +552,7 @@ class DwarfFile : public ElfFile {
     bool read_section_header();
     bool read_set_header(DebugArangesSetHeader& header);
     bool read_address_descriptors(const DwarfFile::DebugAranges::DebugArangesSetHeader& header,
-                                  uint32_t offset_in_library, bool& found_matching_set);
+                                  uint32_t offset_in_library, bool& found_matching_set, bool match);
     bool read_address_descriptor(AddressDescriptor& descriptor);
     static bool does_match_offset(uint32_t offset_in_library, const AddressDescriptor& descriptor) ;
     bool is_terminating_entry(const DwarfFile::DebugAranges::DebugArangesSetHeader& header,
@@ -499,40 +560,13 @@ class DwarfFile : public ElfFile {
    public:
     DebugAranges(DwarfFile* dwarf_file) : _dwarf_file(dwarf_file), _reader(dwarf_file->fd()),
                                           _section_start_address(0), _entry_end(0) {}
-    bool find_compilation_unit_offset(uint32_t offset_in_library, uint32_t* compilation_unit_offset);
+    bool find_compilation_unit_offset(uint32_t offset_in_library, uint32_t* compilation_unit_offset, bool is_die_offset);
 
   };
 
-  // (3a-c,e) The compilation unit is read from the .debug_info section. The structure of .debug_info is shown in the
+  // (3a-b) The compilation unit is read from the .debug_info section. The structure of .debug_info is shown in the
   // comments of class DebugAbbrev.
   class CompilationUnit {
-
-    // Attribute form encodings from Figure 21 in section 7.5 of the DWARF 4 spec.
-    static constexpr uint8_t DW_FORM_addr = 0x01; // address
-    static constexpr uint8_t DW_FORM_block2 = 0x03; // block
-    static constexpr uint8_t DW_FORM_block4 = 0x04; // block
-    static constexpr uint8_t DW_FORM_data2 = 0x05; // constant
-    static constexpr uint8_t DW_FORM_data4 = 0x06; // constant
-    static constexpr uint8_t DW_FORM_data8 = 0x07; // constant
-    static constexpr uint8_t DW_FORM_string = 0x08; // string
-    static constexpr uint8_t DW_FORM_block = 0x09; // block
-    static constexpr uint8_t DW_FORM_block1 = 0x0a; // block
-    static constexpr uint8_t DW_FORM_data1 = 0x0b; // constant
-    static constexpr uint8_t DW_FORM_flag = 0x0c; // flag
-    static constexpr uint8_t DW_FORM_sdata = 0x0d; // constant
-    static constexpr uint8_t DW_FORM_strp = 0x0e; // string
-    static constexpr uint8_t DW_FORM_udata = 0x0f; // constant
-    static constexpr uint8_t DW_FORM_ref_addr = 0x10; // reference0;
-    static constexpr uint8_t DW_FORM_ref1 = 0x11; // reference
-    static constexpr uint8_t DW_FORM_ref2 = 0x12; // reference
-    static constexpr uint8_t DW_FORM_ref4 = 0x13; // reference
-    static constexpr uint8_t DW_FORM_ref8 = 0x14; // reference
-    static constexpr uint8_t DW_FORM_ref_udata = 0x15; // reference
-    static constexpr uint8_t DW_FORM_indirect = 0x16; // see Section 7.5.3
-    static constexpr uint8_t DW_FORM_sec_offset = 0x17; // lineptr, loclistptr, macptr, rangelistptr
-    static constexpr uint8_t DW_FORM_exprloc = 0x18;// exprloc
-    static constexpr uint8_t DW_FORM_flag_present = 0x19; // flag
-    static constexpr uint8_t DW_FORM_ref_sig8 = 0x20; // reference
 
     // The header is defined in section 7.5.1.1 of the DWARF 4 spec.
     struct CompilationUnitHeader {
@@ -551,20 +585,146 @@ class DwarfFile : public ElfFile {
     };
 
     DwarfFile* _dwarf_file;
-    MarkedDwarfFileReader _reader;
-    CompilationUnitHeader _header;
-    const uint32_t _compilation_unit_offset;
 
-    // Result of a request initiated by find_debug_line_offset().
-    uint32_t _debug_line_offset;
-
-    bool read_header();
    public:
     CompilationUnit(DwarfFile* dwarf_file, uint32_t compilation_unit_offset)
       : _dwarf_file(dwarf_file), _reader(dwarf_file->fd()), _compilation_unit_offset(compilation_unit_offset), _debug_line_offset(0) {}
 
-    bool find_debug_line_offset(uint32_t* debug_line_offset);
+    MarkedDwarfFileReader _reader;
+    CompilationUnitHeader _header;
+    const uint32_t _compilation_unit_offset;
+    uint32_t _debug_line_offset;
+    uint32_t _base_ip;
+    // Debuginfo section file offset.
+    uint64_t _sh_offset;
+    uint32_t _die_offset;
+
     bool read_attribute_value(uint64_t attribute_form, bool is_DW_AT_stmt_list_attribute);
+    bool read_header();
+  };
+
+  // (4a-d),(5) The DebuggingInfoEntry has a structure as directory as follwoing:
+  // Top DIE
+  //  DIE 1
+  //    DIE a
+  //    DIE b
+  //  DIE 2
+  //    DIE c
+  //      DIE d
+  //  DIE 3
+  // We can iterate the children of a DIE to get the inline information.
+  class DebuggingInfoEntry : public ResourceObj{
+    MarkedDwarfFileReader _reader;
+    const uint32_t _die_offset;
+    uint32_t* _AT_ranges;
+
+   public:
+    DebuggingInfoEntry(DwarfFile* dwarf_file, CompilationUnit* compilation_unit, uint32_t die_offset)
+      : _reader(dwarf_file->fd()), _die_offset(die_offset),_AT_ranges(nullptr),  _dwarf_file(dwarf_file), _compilation_unit(compilation_unit),
+      _size(0), _AT_stmt_list(nullptr), _AT_name(nullptr), _AT_abstract_origin(nullptr), _AT_specification(nullptr),
+      _AT_sibling(nullptr), _AT_low_pc(nullptr), _AT_high_pc(nullptr), _AT_entry_pc(nullptr), _AT_call_file(nullptr), _AT_call_line(nullptr),
+      _child(nullptr), _terminator(nullptr), _parent(nullptr) {}
+
+    // Initialize the DIE, set reader, read attribute and set the size.
+    bool initDIE() {
+      // 4(a) Set the max pos of reader.
+      _reader.set_max_pos(_compilation_unit->_reader.get_max_pos());
+      if (!_reader.set_position(_compilation_unit->_sh_offset + _die_offset)) {
+        DWARF_LOG_ERROR("set position failed, sh_offset:   " UINT64_FORMAT_X_0 "   position:   " UINT64_FORMAT_X_0 "\n", _compilation_unit->_sh_offset, _compilation_unit->_sh_offset + _die_offset);
+        return false;
+      }
+      // 4(b) Read the abbreviation code.
+      uint64_t abbrev_code;
+      if (!_reader.read_uleb128(&abbrev_code)) {
+        return false;
+      }
+
+      DebugAbbrev debug_abbrev(_dwarf_file, this);
+      if (!debug_abbrev.read_section_header(_compilation_unit->_header._debug_abbrev_offset)) {
+        DWARF_LOG_ERROR("Failed to read the .debug_abbrev header at " UINT32_FORMAT_X_0 "\n", _compilation_unit->_header._debug_abbrev_offset);
+        return false;
+      }
+
+      if (!debug_abbrev.read_attributes_by_abbrev(abbrev_code)) {
+        DWARF_LOG_ERROR("Failed to read the attribute of die at " UINT32_FORMAT_X_0 "\n", _die_offset);
+        return false;
+      }
+
+      _size = _reader.get_position() - (_compilation_unit->_sh_offset + _die_offset);
+      return true;
+    }
+
+    bool offset_in_range(uint32_t offset, const bool is_pc_after_call);
+    bool read_attribute_value(const uint64_t attribute_form, const uint64_t attribute_name);
+    bool get_inlined_info( const uint32_t offset_in_library, char* buf, int buflen, const bool is_pc_after_call, bool first, uint32_t pre_origin);
+    bool get_parent();
+
+    DwarfFile* _dwarf_file;
+    CompilationUnit* _compilation_unit;
+
+    uint64_t _tag;
+    // The size of DIE，to traverse the children.
+    uint32_t _size;
+    bool _has_children;
+
+    uint32_t* _AT_stmt_list;
+    struct name {
+      uint8_t form;
+      char string[STRING_BUF_LEN];
+    } *_AT_name;
+    struct attribute {
+      uint8_t form;
+      uint64_t value;
+    } *_AT_abstract_origin, *_AT_specification, *_AT_sibling, *_AT_low_pc, *_AT_high_pc, *_AT_entry_pc, *_AT_call_file, *_AT_call_line;
+
+    DebuggingInfoEntry* _child;
+    DebuggingInfoEntry* _terminator;
+    DebuggingInfoEntry* _parent;
+    // Record the current offset while iterate the children.
+    uint32_t _cur_offset;
+
+    //Iterate the children.
+    bool iter_children();
+  };
+
+  // Range List which the attribute DW_AT_ranges indicates.
+  // Structure of .debug_ranges:
+  //   Section Header
+  //   offset1: low_pc high_pc
+  //            low_pc high_pc
+  //            <end of list>
+  //   offset2: low_pc high_pc
+  //            low_pc high_pc
+  //            <end of list>
+  //   ...
+  class DebugRanges {
+    DwarfFile* _dwarf_file;
+    MarkedDwarfFileReader _reader;
+    const uint32_t _debug_ranges_offset;
+    const uint32_t _compile_unit_low_pc;
+    const uint32_t _max_addr = 1 << (DwarfFile::ADDRESS_SIZE-1) -1;
+
+   public:
+    DebugRanges(DwarfFile* dwarf_file, uint32_t debug_ranges_offset, uint32_t compile_unit_low_pc) :
+      _dwarf_file(dwarf_file), _reader(_dwarf_file->fd()), _debug_ranges_offset(debug_ranges_offset), _compile_unit_low_pc(compile_unit_low_pc) {}
+
+    bool read_section_header();
+    bool offset_in_range(uint32_t offset, const bool is_pc_after_call);
+  };
+
+  // The section consists of a series of strings
+  // We can get string by DW_FORM_strp, which is the offset of .debug_str.
+  class DebugStr {
+    DwarfFile* _dwarf_file;
+    MarkedDwarfFileReader _reader;
+    const uint32_t _debug_str_offset;
+
+   public:
+    DebugStr(DwarfFile* dwarf_file, uint32_t debug_str_offset) :
+      _dwarf_file(dwarf_file), _reader(_dwarf_file->fd()), _debug_str_offset(debug_str_offset) {}
+
+    bool read_section_header();
+    bool read_string(char* str);
   };
 
   // (3d) Read from the .debug_abbrev section at the debug_abbrev_offset specified by the compilation unit header.
@@ -633,40 +793,29 @@ class DwarfFile : public ElfFile {
       uint64_t _form;
     };
 
-    // Tag encoding from Figure 18 in section 7.5 of the DWARF 4 spec.
-    static constexpr uint8_t DW_TAG_compile_unit = 0x11;
-
-    // Child determination encoding from Figure 19 in section 7.5 of the DWARF 4 spec.
-    static constexpr uint8_t DW_CHILDREN_yes = 0x01;
-
-    // Attribute encoding from Figure 20 in section 7.5 of the DWARF 4 spec.
-    static constexpr uint8_t DW_AT_stmt_list = 0x10;
-
     /* There is no specific header for this section */
 
     DwarfFile* _dwarf_file;
     MarkedDwarfFileReader _reader;
-    CompilationUnit* _compilation_unit; // Need to read from compilation unit while parsing the entries in .debug_abbrev.
-
-    // Result field of a request
-    uint32_t* _debug_line_offset;
+    // Need to read from compilation unit while parsing the entries in .debug_abbrev.
+    DebuggingInfoEntry* _die;
 
     bool read_declaration(AbbreviationDeclaration& declaration);
     static bool is_wrong_or_unsupported_format(const AbbreviationDeclaration& declaration);
-    bool read_attribute_specifications(bool is_DW_TAG_compile_unit);
+    bool read_attribute_specifications(const bool is_DIE);
     bool read_attribute_specification(AttributeSpecification& specification);
     static bool is_terminating_specification(const AttributeSpecification& attribute_specification) ;
 
    public:
-    DebugAbbrev(DwarfFile* dwarf_file, CompilationUnit* compilation_unit) :
-      _dwarf_file(dwarf_file), _reader(_dwarf_file->fd()), _compilation_unit(compilation_unit),
-      _debug_line_offset(nullptr) {}
+    DebugAbbrev(DwarfFile* dwarf_file, DebuggingInfoEntry* die) :
+      _dwarf_file(dwarf_file), _reader(_dwarf_file->fd()),
+      _die(die) {}
 
     bool read_section_header(uint32_t debug_abbrev_offset);
-    bool find_debug_line_offset(uint64_t abbrev_code);
+    bool read_attributes_by_abbrev(uint64_t abbrev_code);
   };
 
-  // (4) The line number program for the compilation unit at the offset of the .debug_line obtained by (3).
+  // (6) The line number program for the compilation unit at the offset of the .debug_line obtained by 4(d).
   // For some reason, earlier GCC versions emit the line number program in DWARF 2 or 3 format even though the
   // default is DWARF 4. It also mixes the standards (see comments in the parsing code).
   //
@@ -678,7 +827,7 @@ class DwarfFile : public ElfFile {
   // DWARF 3 standard: https://dwarfstd.org/doc/Dwarf3.pdf
   //
   //
-  // Structure of .debug_ling:
+  // Structure of .debug_line:
   //   Section Header
   //   % Series of line number program entries for each compilation unit
   //     % Line number program 1
@@ -860,7 +1009,6 @@ class DwarfFile : public ElfFile {
     const uint64_t _debug_line_offset;
     bool _is_pc_after_call;
 
-    bool read_header();
     bool run_line_number_program(char* filename, size_t filename_len, int* line);
     bool apply_opcode();
     bool apply_extended_opcode();
@@ -868,23 +1016,27 @@ class DwarfFile : public ElfFile {
     void apply_special_opcode(uint8_t opcode);
     bool does_offset_match_entry(uintptr_t previous_address, uint32_t previous_file, uint32_t previous_line);
     void print_and_store_prev_entry(uint32_t previous_file, uint32_t previous_line);
-    bool get_filename_from_header(uint32_t file_index, char* filename, size_t filename_len);
     bool read_filename(char* filename, size_t filename_len);
     static void write_filename_for_overflow(char* filename, size_t filename_len) ;
 
    public:
     LineNumberProgram(DwarfFile* dwarf_file, uint32_t offset_in_library, uint64_t debug_line_offset, bool is_pc_after_call)
-      : _dwarf_file(dwarf_file), _reader(dwarf_file->fd()), _offset_in_library(offset_in_library),
+      : _dwarf_file(dwarf_file), _reader(dwarf_file->fd()), _state(nullptr), _offset_in_library(offset_in_library),
         _debug_line_offset(debug_line_offset), _is_pc_after_call(is_pc_after_call) {}
 
-    ~LineNumberProgram() { delete _state; }
+    ~LineNumberProgram() {
+      if(_state != nullptr) delete _state;
+    }
 
+    bool read_header();
     bool find_filename_and_line_number(char* filename, size_t filename_len, int* line);
+    bool get_filename_from_header(uint32_t file_index, char* filename, size_t filename_len);
   };
 
  public:
   DwarfFile(const char* filepath) : ElfFile(filepath) {}
 
+  DwarfFile::CompilationUnit* get_compilation_unit(DebuggingInfoEntry* die, bool is_origin);
   /*
    * Starting point of reading line number and filename information from the DWARF file.
    *
@@ -896,6 +1048,7 @@ class DwarfFile : public ElfFile {
    *  More details about the different phases can be found at the associated methods.
    */
   bool get_filename_and_line_number(uint32_t offset_in_library, char* filename, size_t filename_len, int* line, bool is_pc_after_call);
+  bool get_inlined_info(uint32_t offset_in_library, char* buf, int buflen, bool is_pc_after_call);
 };
 
 #endif // !_WINDOWS && !__APPLE__

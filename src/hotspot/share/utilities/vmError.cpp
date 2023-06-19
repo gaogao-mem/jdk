@@ -308,7 +308,7 @@ void VMError::print_stack_trace(outputStream* st, JavaThread* jt,
   if (jt->has_last_Java_frame()) {
     st->print_cr("Java frames: (J=compiled Java code, j=interpreted, Vv=VM code)");
     for (StackFrameStream sfs(jt, true /* update */, true /* process_frames */); !sfs.is_done(); sfs.next()) {
-      sfs.current()->print_on_error(st, buf, buflen, verbose);
+      sfs.current()->print_on_error(st, buf, buflen, nullptr, 0, verbose);
       st->cr();
     }
   }
@@ -449,19 +449,35 @@ void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool pri
     const int limit = max_frames == -1 ? StackPrintLimit : MIN2(max_frames, (int)StackPrintLimit);
     int count = 0;
     while (count++ < limit) {
-      fr.print_on_error(st, buf, buf_size);
+      char res[1024];
+      fr.print_on_error(st, buf, buf_size, res, sizeof(res));
       if (fr.pc()) { // print source file and line, if available
-        char filename[128];
-        int line_no;
-        if (count == 1 && _lineno != 0) {
-          // We have source information of the first frame for internal errors. There is no need to parse it from the symbols.
-          st->print("  (%s:%d)", get_filename_only(), _lineno);
-        } else if (print_source_info &&
-                   Decoder::get_source_info(fr.pc(), filename, sizeof(filename), &line_no, count != 1)) {
-          st->print("  (%s:%d)", filename, line_no);
+        char newbuf[2048];
+        if (print_source_info &&
+                   Decoder::get_source_info(fr.pc(), newbuf, sizeof(newbuf), count != 1)) {
+          // Get the information of lib and offset.
+          char lib[128];
+          char *ptr = strchr(res, ']');
+          strncpy(lib, res, ptr - res + 1);
+          lib[ptr - res + 1] = '\0';
+          // We get the inline stack information from top to bottom via get_source_info, but we should print it reversely.
+          int end = strlen(newbuf) - 1;
+          char s[128];
+          for (int i = end; i >= 0; i--) {
+            if (newbuf[i] == '\n' && i != end) {
+              strncpy(s, newbuf + i + 1, end - i - 1);
+              s[end - i - 1] = '\0';
+              st->print_cr("%s%s  [inline]", lib, s);
+              end = i;
+            }
+          }
+          strncpy(s, newbuf, end);
+          s[end] = '\0';
+          st->print_cr("%s%s", res, s);
+        } else {
+          st->cr();
         }
       }
-      st->cr();
       fr = next_frame(fr, t);
       if (fr.pc() == nullptr) {
         break;
@@ -893,7 +909,7 @@ void VMError::report(outputStream* st, bool _verbose) {
     st->print_cr("# Problematic frame:");
     st->print("# ");
     frame fr = os::fetch_frame_from_context(_context);
-    fr.print_on_error(st, buf, sizeof(buf));
+    fr.print_on_error(st, buf, sizeof(buf), nullptr, 0);
     st->cr();
     st->print_cr("#");
 

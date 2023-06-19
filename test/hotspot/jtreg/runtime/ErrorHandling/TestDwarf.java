@@ -132,7 +132,7 @@ public class TestDwarf {
             boolean foundNativeFrames = false;
             int matches = 0;
             int frameIdx = 0;
-            Pattern pattern = Pattern.compile("[CV][\\s\\t]+\\[([a-zA-Z0-9_.]+)\\+0x.+][\\s\\t]+.*\\+0x.+[\\s\\t]+\\([a-zA-Z0-9_.]+\\.[a-z]+:[1-9][0-9]*\\)");
+            Pattern pattern = Pattern.compile("[CV][\\s\\t]+\\[([a-zA-Z0-9_.]+)\\+0x.+][\\s\\t]+.*\\([a-zA-Z0-9_.]+\\.[a-z]+:[1-9][0-9]*\\)");
             // Check all stack entries after the line starting with "Native frames" in the hs_err_file until an empty line
             // is found which denotes the end of the stack frames.
             while ((line = reader.readLine()) != null) {
