@@ -198,7 +198,7 @@ class ElfFile: public CHeapObj<mtInternal> {
   // On systems other than linux it always returns false.
   static bool specifies_noexecstack(const char* filepath) NOT_LINUX({ return false; });
 
-  bool get_source_info(uint32_t offset_in_library, char* buf, int buflen, bool is_pc_after_call);
+  bool get_source_info(uint32_t offset_in_library, char* buf, size_t buflen, bool is_pc_after_call);
 
  private:
   // sanity check, if the file is a real elf file
@@ -460,7 +460,7 @@ class DwarfFile : public ElfFile {
   static const size_t STRING_BUF_LEN = 256;
   static constexpr const char* overflow_msg = "<OVERFLOW>";
   static constexpr const char minimal_overflow_msg = 'L';
-  static void write_buf(char* buf, int buflen, char* str);
+  static void write_source_info_buf(char* buf, size_t buflen, char* str);
 
   class MarkedDwarfFileReader : public MarkedFileReader {
    private:
@@ -656,7 +656,7 @@ class DwarfFile : public ElfFile {
 
     bool offset_in_range(uint32_t offset, const bool is_pc_after_call);
     bool read_attribute_value(const uint64_t attribute_form, const uint64_t attribute_name);
-    bool get_inlined_info( const uint32_t offset_in_library, char* buf, int buflen, const bool is_pc_after_call, bool first, uint32_t pre_origin);
+    bool get_inlined_info( const uint32_t offset_in_library, char* buf, size_t buflen, const bool is_pc_after_call, bool first, uint32_t pre_origin);
     bool get_parent();
 
     DwarfFile* _dwarf_file;
@@ -1048,7 +1048,7 @@ class DwarfFile : public ElfFile {
    *  More details about the different phases can be found at the associated methods.
    */
   bool get_filename_and_line_number(uint32_t offset_in_library, char* filename, size_t filename_len, int* line, bool is_pc_after_call);
-  bool get_inlined_info(uint32_t offset_in_library, char* buf, int buflen, bool is_pc_after_call);
+  bool get_inlined_info(uint32_t offset_in_library, char* buf, size_t buflen, bool is_pc_after_call);
 };
 
 #endif // !_WINDOWS && !__APPLE__

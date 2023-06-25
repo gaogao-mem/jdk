@@ -593,16 +593,10 @@ void frame::interpreter_frame_print_on(outputStream* st) const {
 // Print whether the frame is in the VM or OS indicating a HotSpot problem.
 // Otherwise, it's likely a bug in the native library that the Java code calls,
 // hopefully indicating where to submit bugs.
-void frame::print_C_frame(outputStream* st, char* buf, int buflen, char* res, int reslen, address pc) {
+void frame::print_C_frame(outputStream* st, char* buf, int buflen, address pc) {
   // C/C++ frame
   bool in_vm = os::address_is_in_vm(pc);
-  if (res != nullptr) {
-    res[0] = '\0';
-    int len = strlen(res);
-    jio_snprintf(res + len, reslen - len, in_vm ? "V" : "C");
-  } else {
-    st->print(in_vm ? "V" : "C");
-  }
+  st->print(in_vm ? "V" : "C");
 
   int offset;
   bool found;
@@ -617,28 +611,14 @@ void frame::print_C_frame(outputStream* st, char* buf, int buflen, char* res, in
     p1 = buf;
     int len = (int)strlen(os::file_separator());
     while ((p2 = strstr(p1, os::file_separator())) != nullptr) p1 = p2 + len;
-    if (res != nullptr){
-      int len = strlen(res);
-      jio_snprintf(res + len, reslen - len, "  [%s+0x%x]", p1, offset);
-    } else {
-      st->print("  [%s+0x%x]", p1, offset);
-    }
+    st->print("  [%s+0x%x]", p1, offset);
   } else {
-    if (res != nullptr){
-      int len = strlen(res);
-      jio_snprintf(res + len, reslen - len, "  ");
-    } else {
-      st->print("  " PTR_FORMAT, p2i(pc));
-    }
+    st->print("  " PTR_FORMAT, p2i(pc));
   }
 
   found = os::dll_address_to_function_name(pc, buf, buflen, &offset);
   if (found) {
-    if (res != nullptr){
-      jio_snprintf(res + strlen(res), reslen, "  %s+0x%x", buf, offset);
-    } else {
-      st->print("  %s+0x%x", buf, offset);
-    }
+    st->print("  %s+0x%x", buf, offset);
   }
 }
 
@@ -656,7 +636,7 @@ void frame::print_C_frame(outputStream* st, char* buf, int buflen, char* res, in
 // We don't need detailed frame type as that in frame::print_name(). "C"
 // suggests the problem is in user lib; everything else is likely a VM bug.
 
-void frame::print_on_error(outputStream* st, char* buf, int buflen, char* res, int reslen, bool verbose) const {
+void frame::print_on_error(outputStream* st, char* buf, int buflen, bool verbose) const {
   if (_cb != nullptr) {
     if (Interpreter::contains(pc())) {
       Method* m = this->interpreter_frame_method();
@@ -739,7 +719,7 @@ void frame::print_on_error(outputStream* st, char* buf, int buflen, char* res, i
       st->print("v  blob " PTR_FORMAT, p2i(pc()));
     }
   } else {
-    print_C_frame(st, buf, buflen, res, reslen, pc());
+    print_C_frame(st, buf, buflen, pc());
   }
 }
 

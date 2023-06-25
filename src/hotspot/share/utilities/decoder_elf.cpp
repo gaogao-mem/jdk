@@ -54,7 +54,7 @@ bool ElfDecoder::decode(address addr, char *buf, int buflen, int* offset, const 
   return true;
 }
 
-bool ElfDecoder::get_source_info(address pc, char* buf, int buflen, bool is_pc_after_call) {
+bool ElfDecoder::get_source_info(address pc, char* buf, size_t buflen, bool is_pc_after_call) {
 #if defined(__clang_major__) && (__clang_major__ < 5)
   DWARF_LOG_ERROR("The DWARF parser only supports Clang 5.0+.");
   return false;
@@ -86,6 +86,8 @@ bool ElfDecoder::get_source_info(address pc, char* buf, int buflen, bool is_pc_a
                  unsigned_offset_in_library, filepath);
 
   if (!file->get_source_info(unsigned_offset_in_library, buf, buflen, is_pc_after_call)) {
+    // Return sane values.
+    buf[0] = '\0';
     return false;
   }
 

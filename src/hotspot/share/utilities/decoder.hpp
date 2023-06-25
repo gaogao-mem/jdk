@@ -66,7 +66,7 @@ public:
   virtual bool demangle(const char* symbol, char* buf, int buflen) = 0;
 
   // Get inline function stack, file name and line number  information.
-  virtual bool get_source_info(address pc, char* buf, int buflen, bool is_pc_after_call) {
+  virtual bool get_source_info(address pc, char* buf, size_t buflen, bool is_pc_after_call) {
     return false;
   }
 
@@ -116,7 +116,7 @@ public:
   // Attempts to retrieve inline function stack, source file name and line number associated with a pc.
   // If is_pc_after_call is true, then pc is treated as pointing to the next instruction
   // after a call. The source information for the call instruction is fetched in that case.
-  static bool get_source_info(address pc, char* buf, int buflen, bool is_pc_after_call = false);
+  static bool get_source_info(address pc, char* buf, size_t buflen, bool is_pc_after_call = false);
 
   static void print_state_on(outputStream* st);
 

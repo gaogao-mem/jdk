@@ -308,7 +308,7 @@ void VMError::print_stack_trace(outputStream* st, JavaThread* jt,
   if (jt->has_last_Java_frame()) {
     st->print_cr("Java frames: (J=compiled Java code, j=interpreted, Vv=VM code)");
     for (StackFrameStream sfs(jt, true /* update */, true /* process_frames */); !sfs.is_done(); sfs.next()) {
-      sfs.current()->print_on_error(st, buf, buflen, nullptr, 0, verbose);
+      sfs.current()->print_on_error(st, buf, buflen, verbose);
       st->cr();
     }
   }
@@ -449,8 +449,9 @@ void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool pri
     const int limit = max_frames == -1 ? StackPrintLimit : MIN2(max_frames, (int)StackPrintLimit);
     int count = 0;
     while (count++ < limit) {
-      char res[1024];
-      fr.print_on_error(st, buf, buf_size, res, sizeof(res));
+      stringStream ss;
+      fr.print_on_error(&ss, buf, buf_size);
+      char* res = ss.as_string();
       if (fr.pc()) { // print source file and line, if available
         char newbuf[2048];
         if (print_source_info &&
@@ -475,7 +476,7 @@ void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool pri
           s[end] = '\0';
           st->print_cr("%s%s", res, s);
         } else {
-          st->cr();
+          st->print_cr("%s", res);
         }
       }
       fr = next_frame(fr, t);
@@ -909,7 +910,7 @@ void VMError::report(outputStream* st, bool _verbose) {
     st->print_cr("# Problematic frame:");
     st->print("# ");
     frame fr = os::fetch_frame_from_context(_context);
-    fr.print_on_error(st, buf, sizeof(buf), nullptr, 0);
+    fr.print_on_error(st, buf, sizeof(buf));
     st->cr();
     st->print_cr("#");
 

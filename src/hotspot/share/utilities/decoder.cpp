@@ -113,7 +113,7 @@ bool Decoder::demangle(const char* symbol, char* buf, int buflen) {
 void Decoder::print_state_on(outputStream* st) {
 }
 
-bool Decoder::get_source_info(address pc, char* buf, int buflen, bool is_pc_after_call) {
+bool Decoder::get_source_info(address pc, char* buf, size_t buflen, bool is_pc_after_call) {
   if (VMError::is_error_reported_in_current_thread()) {
     return get_error_handler_instance()->get_source_info(pc, buf, buflen, is_pc_after_call);
   } else {
