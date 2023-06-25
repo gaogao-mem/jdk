@@ -594,6 +594,17 @@ void frame::interpreter_frame_print_on(outputStream* st) const {
 // Otherwise, it's likely a bug in the native library that the Java code calls,
 // hopefully indicating where to submit bugs.
 void frame::print_C_frame(outputStream* st, char* buf, int buflen, address pc) {
+  print_C_frame_without_function_name(st, buf, buflen, pc);
+
+  int offset;
+  bool found;
+  found = os::dll_address_to_function_name(pc, buf, buflen, &offset);
+  if (found) {
+    st->print("  %s+0x%x", buf, offset);
+  }
+}
+
+void frame::print_C_frame_without_function_name(outputStream* st, char* buf, int buflen, address pc) {
   // C/C++ frame
   bool in_vm = os::address_is_in_vm(pc);
   st->print(in_vm ? "V" : "C");
@@ -614,11 +625,6 @@ void frame::print_C_frame(outputStream* st, char* buf, int buflen, address pc) {
     st->print("  [%s+0x%x]", p1, offset);
   } else {
     st->print("  " PTR_FORMAT, p2i(pc));
-  }
-
-  found = os::dll_address_to_function_name(pc, buf, buflen, &offset);
-  if (found) {
-    st->print("  %s+0x%x", buf, offset);
   }
 }
 

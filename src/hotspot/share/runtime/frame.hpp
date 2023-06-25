@@ -421,6 +421,7 @@ class frame {
   void interpreter_frame_print_on(outputStream* st) const;
   void print_on_error(outputStream* st, char* buf, int buflen, bool verbose = false) const;
   static void print_C_frame(outputStream* st, char* buf, int buflen, address pc);
+  static void print_C_frame_without_function_name(outputStream* st, char* buf, int buflen, address pc);
 
   // Add annotated descriptions of memory locations belonging to this frame to values
   void describe(FrameValues& values, int frame_no, const RegisterMap* reg_map=nullptr);

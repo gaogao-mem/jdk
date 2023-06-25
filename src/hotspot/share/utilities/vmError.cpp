@@ -449,36 +449,29 @@ void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool pri
     const int limit = max_frames == -1 ? StackPrintLimit : MIN2(max_frames, (int)StackPrintLimit);
     int count = 0;
     while (count++ < limit) {
-      stringStream ss;
-      fr.print_on_error(&ss, buf, buf_size);
-      char* res = ss.as_string();
       if (fr.pc()) { // print source file and line, if available
-        char newbuf[2048];
+        GrowableArrayCHeap<char*, mtInternal>* infoList = new GrowableArrayCHeap<char*, mtInternal>(3);
         if (print_source_info &&
-                   Decoder::get_source_info(fr.pc(), newbuf, sizeof(newbuf), count != 1)) {
-          // Get the information of lib and offset.
-          char lib[128];
-          char *ptr = strchr(res, ']');
-          strncpy(lib, res, ptr - res + 1);
-          lib[ptr - res + 1] = '\0';
+                   Decoder::get_source_info(fr.pc(), infoList, 1024, count != 1)) {
+          // Get the information of lib and offset. eg. V  [libjvm.so+0x1980e3d]
+          stringStream ss;
+          fr.print_C_frame_without_function_name(&ss, buf, buf_size, fr.pc());
           // We get the inline stack information from top to bottom via get_source_info, but we should print it reversely.
-          int end = strlen(newbuf) - 1;
-          char s[128];
-          for (int i = end; i >= 0; i--) {
-            if (newbuf[i] == '\n' && i != end) {
-              strncpy(s, newbuf + i + 1, end - i - 1);
-              s[end - i - 1] = '\0';
-              st->print_cr("%s%s  [inline]", lib, s);
-              end = i;
-            }
+          while(infoList->length() > 1) {
+            char* buf = infoList->pop();
+            st->print_cr("%s%s  [inline]", ss.as_string(), buf);
           }
-          strncpy(s, newbuf, end);
-          s[end] = '\0';
-          st->print_cr("%s%s", res, s);
+          fr.print_on_error(st, buf, buf_size);
+          if(!infoList->is_empty()) {
+            st->print("%s", infoList->pop());
+          }
         } else {
-          st->print_cr("%s", res);
+          fr.print_on_error(st, buf, buf_size);
         }
+      } else {
+        fr.print_on_error(st, buf, buf_size);
       }
+      st->cr();
       fr = next_frame(fr, t);
       if (fr.pc() == nullptr) {
         break;

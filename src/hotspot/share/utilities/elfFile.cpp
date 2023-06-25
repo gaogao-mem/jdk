@@ -350,7 +350,7 @@ ElfStringTable* ElfFile::get_string_table(int index) {
 
 // Use unified logging to report errors rather than assert() throughout this method as this code is already part of the error reporting
 // and the debug symbols might be in an unsupported DWARF version or wrong format.
-bool ElfFile::get_source_info(const uint32_t offset_in_library, char* buf, size_t buflen, bool is_pc_after_call) {
+bool ElfFile::get_source_info(const uint32_t offset_in_library, GrowableArrayCHeap<char*, mtInternal>* infoList, size_t buflen, bool is_pc_after_call) {
   if (!load_dwarf_file()) {
     // Some ELF libraries do not provide separate .debuginfo files. Check if the current ELF file has the required
     // DWARF sections. If so, treat the current ELF file as DWARF file.
@@ -366,7 +366,7 @@ bool ElfFile::get_source_info(const uint32_t offset_in_library, char* buf, size_
   }
 
   // Get source info of the offset, including inline function.
-  if (!_dwarf_file->get_inlined_info(offset_in_library, buf, buflen, is_pc_after_call)) {
+  if (!_dwarf_file->get_inlined_info(offset_in_library, infoList, buflen, is_pc_after_call)) {
     DWARF_LOG_ERROR("Failed to retrieve file and line number information for %s at offset: " UINT32_FORMAT_X_0, _filepath,
                     offset_in_library);
     return false;
@@ -702,7 +702,7 @@ void DwarfFile::write_source_info_buf(char* buf, size_t buflen, char* str) {
   }
 }
 
-bool DwarfFile::get_inlined_info(const uint32_t offset_in_library, char* buf, size_t buflen, const bool is_pc_after_call) {
+bool DwarfFile::get_inlined_info(const uint32_t offset_in_library, GrowableArrayCHeap<char*, mtInternal>* infoList, size_t buflen, const bool is_pc_after_call) {
   DWARF_LOG_INFO("Get_inlined_info ------offset_in_library" UINT32_FORMAT_X "--------------------------------------------", offset_in_library);
   DebugAranges debug_aranges(this);
   uint32_t compilation_unit_offset = 0; // 4-bytes for 32-bit DWARF
@@ -730,7 +730,7 @@ bool DwarfFile::get_inlined_info(const uint32_t offset_in_library, char* buf, si
   if (die->_AT_low_pc != nullptr) compilation_unit._base_ip = die->_AT_low_pc->value;
   else if(die->_AT_entry_pc != nullptr) compilation_unit._base_ip = die->_AT_entry_pc->value;
 
-  if(!die->get_inlined_info(offset_in_library, buf, buflen, is_pc_after_call, true, -1)) return false;
+  if(!die->get_inlined_info(offset_in_library, infoList, buflen, is_pc_after_call, true, -1)) return false;
 
   // Get the innerest filename and line number.
   LineNumberProgram line_number_program(this, offset_in_library, compilation_unit._debug_line_offset, is_pc_after_call);
@@ -740,9 +740,19 @@ bool DwarfFile::get_inlined_info(const uint32_t offset_in_library, char* buf, si
     DWARF_LOG_ERROR("Failed to process the line number program correctly.");
     return false;
   }
+
+  char buf[buflen] = "";
+  if (!infoList->is_empty()) {
+    strcpy(buf, infoList->top());
+  }
   char str[buflen + 1];
-  jio_snprintf(str, buflen + 1, "  (%s:%d)\n", filename, line);
+  jio_snprintf(str, buflen + 1, "  (%s:%d)", filename, line);
   write_source_info_buf(buf, buflen, str);
+  if (infoList->is_empty()) {
+    infoList->push(os::strdup((const char*)buf, mtInternal));
+  } else {
+    infoList->at_put(infoList->length() - 1, os::strdup((const char*)buf, mtInternal));
+  }
   return true;
 }
 
@@ -1217,7 +1227,7 @@ bool DwarfFile::DebuggingInfoEntry::read_attribute_value(const uint64_t attribut
 }
 
 // (5) Traverse the children to get the inline source info.
-bool DwarfFile::DebuggingInfoEntry::get_inlined_info(const uint32_t offset_in_library, char *buf, size_t buflen, const bool is_pc_after_call, bool first, uint32_t pre_origin){
+bool DwarfFile::DebuggingInfoEntry::get_inlined_info(const uint32_t offset_in_library, GrowableArrayCHeap<char*, mtInternal>* infoList, size_t buflen, const bool is_pc_after_call, bool first, uint32_t pre_origin){
   DebuggingInfoEntry* callsite = nullptr;
   DebuggingInfoEntry* subDie = nullptr;
   // Iterate the children.
@@ -1267,9 +1277,19 @@ bool DwarfFile::DebuggingInfoEntry::get_inlined_info(const uint32_t offset_in_li
     }
     line_number_program.get_filename_from_header(subDie->_AT_call_file->value, filename, sizeof(filename));
     DWARF_LOG_INFO("File name: %s, line number:" UINT64_FORMAT, filename, subDie->_AT_call_line->value);
+
+    char buf[buflen] = "";
+    if (!infoList->is_empty()) {
+      strcpy(buf, infoList->top());
+    }
     char str[buflen + 1];
-    jio_snprintf(str, buflen + 1, "  (%s:" UINT64_FORMAT ")\n", filename, subDie->_AT_call_line->value);
+    jio_snprintf(str, buflen + 1, "  (%s:" UINT64_FORMAT ")", filename, subDie->_AT_call_line->value);
     write_source_info_buf(buf, buflen, str);
+    if (infoList->is_empty()) {
+      infoList->push(os::strdup((const char*)buf, mtInternal));
+    } else {
+      infoList->at_put(infoList->length() - 1, os::strdup((const char*)buf, mtInternal));
+    }
   }
 
   if (newDie->_AT_specification != nullptr) {
@@ -1283,23 +1303,20 @@ bool DwarfFile::DebuggingInfoEntry::get_inlined_info(const uint32_t offset_in_li
   if (newDie->_AT_name != nullptr) {
     DWARF_LOG_INFO("Function name: %s", newDie->_AT_name->string);//获取name .debugstr
     if (!first) {
+      char buf[buflen] = "";
       // Get the class name of function.
       bool has_class = newDie->get_parent() && newDie->_parent->_tag == DW_TAG_class_type;
-      if (has_class) {
-        char str[buflen + 1];
-        jio_snprintf(str, buflen + 1, "  %s::", newDie->_parent->_AT_name->string);
-        write_source_info_buf(buf, buflen, str);
-      }
       char str[buflen + 1];
-      jio_snprintf(str, buflen + 1, has_class ? "%s" : "  %s", newDie->_AT_name->string);
+      jio_snprintf(str, buflen + 1, has_class ? "  %s::%s" : "%s  %s", has_class ? newDie->_parent->_AT_name->string : "", newDie->_AT_name->string);
       write_source_info_buf(buf, buflen, str);
+      infoList->push(os::strdup((const char*)buf, mtInternal));
     } else {
       first = false;
     }
   }
 
   // Iterate the child in range.
-  return subDie->get_inlined_info(offset_in_library, buf, buflen, is_pc_after_call, first, pre_origin);
+  return subDie->get_inlined_info(offset_in_library, infoList, buflen, is_pc_after_call, first, pre_origin);
 }
 
 bool DwarfFile::DebuggingInfoEntry::get_parent() {
