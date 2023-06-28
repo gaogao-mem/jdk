@@ -451,20 +451,19 @@ void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool pri
     while (count++ < limit) {
       if (fr.pc()) { // print source file and line, if available
         GrowableArrayCHeap<char*, mtInternal> infoList(3);
+        ResourceMark rm;
         if (print_source_info &&
-                   Decoder::get_source_info(fr.pc(), &infoList, 1024, count != 1)) {
+                   Decoder::get_source_info(fr.pc(), &infoList, 256, count != 1)) {
           // Get the information of lib and offset. eg. V  [libjvm.so+0x1980e3d]
           stringStream ss;
           fr.print_C_frame_prefix(&ss, buf, buf_size, fr.pc());
           // We get the inline stack information from top to bottom via get_source_info, but we should print it reversely.
           for (int i = infoList.length() - 1; i > 0; i--) {
             st->print_cr("%s%s  [inline]", ss.as_string(), infoList.at(i));
-            os::free(infoList.at(i));
           }
-          fr.print_on_error(st, buf, buf_size);
+          fr.print_C_frame(st, buf, buf_size, fr.pc());
           if (infoList.length() > 0) {
             st->print("%s", infoList.at(0));
-            os::free(infoList.at(0));
           }
         } else {
           fr.print_on_error(st, buf, buf_size);

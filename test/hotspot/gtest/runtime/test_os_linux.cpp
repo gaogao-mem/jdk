@@ -443,6 +443,7 @@ TEST_VM(os_linux, decoder_get_source_info_valid) {
   int line = -1;
   address valid_function_pointer = (address)ReportJNIFatalError;
   GrowableArrayCHeap<char*, mtInternal>* infoList = new GrowableArrayCHeap<char*, mtInternal>(3);
+  ResourceMark rm;
   ASSERT_TRUE(Decoder::get_source_info(valid_function_pointer, infoList, 1024, false));
   ASSERT_TRUE(!infoList->is_empty());
   char* buf = infoList->pop();
@@ -464,6 +465,7 @@ TEST_VM(os_linux, decoder_get_source_info_invalid) {
 
   for (address addr : invalid_function_pointers) {
     GrowableArrayCHeap<char*, mtInternal>* infoList = new GrowableArrayCHeap<char*, mtInternal>(3);
+    ResourceMark rm;
     // We should return false but do not crash or fail in any way.
     ASSERT_FALSE(Decoder::get_source_info(addr, infoList, 1024, false));
     ASSERT_TRUE(infoList->is_empty()); // Should contain "" on error
@@ -474,6 +476,7 @@ TEST_VM(os_linux, decoder_get_source_info_invalid) {
 TEST_VM(os_linux, decoder_get_source_info_valid_overflow) {
   address valid_function_pointer = (address)ReportJNIFatalError;
   GrowableArrayCHeap<char*, mtInternal>* infoList = new GrowableArrayCHeap<char*, mtInternal>(3);
+  ResourceMark rm;
   ASSERT_TRUE(Decoder::get_source_info(valid_function_pointer, infoList, 11, false));
   ASSERT_TRUE(strcmp(infoList->pop(), "<OVERFLOW>") == 0);
 }
@@ -483,6 +486,7 @@ TEST_VM(os_linux, decoder_get_source_info_valid_overflow) {
 TEST_VM(os_linux, decoder_get_source_info_valid_overflow_minimal) {
   address valid_function_pointer = (address)ReportJNIFatalError;
   GrowableArrayCHeap<char*, mtInternal>* infoList = new GrowableArrayCHeap<char*, mtInternal>(3);
+  ResourceMark rm;
   ASSERT_TRUE(Decoder::get_source_info(valid_function_pointer, infoList, 2, false));
   ASSERT_TRUE(strcmp(infoList->pop(), "L") == 0); // Overflow message does not fit, so we fall back to "L:line_number"
 }

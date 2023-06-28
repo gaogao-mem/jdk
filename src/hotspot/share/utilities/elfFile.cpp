@@ -719,7 +719,6 @@ bool DwarfFile::get_inlined_info(const uint32_t offset_in_library, GrowableArray
   }
 
   // Get the top die of compilation_unit, compilation_unit header size is 11.
-  ResourceMark rm;
   DebuggingInfoEntry* die =  new DebuggingInfoEntry(this, &compilation_unit, compilation_unit_offset + CU_HEADER_SIZE);
   if(!die->initDIE()) return false;
 
@@ -741,17 +740,19 @@ bool DwarfFile::get_inlined_info(const uint32_t offset_in_library, GrowableArray
     return false;
   }
 
-  char buf[buflen] = "";
+  char* buf = NEW_RESOURCE_ARRAY(char, buflen);
   if (!infoList->is_empty()) {
     strcpy(buf, infoList->top());
+  } else {
+    strcpy(buf, "");
   }
   char str[buflen + 1];
   jio_snprintf(str, buflen + 1, "  (%s:%d)", filename, line);
   write_source_info_buf(buf, buflen, str);
   if (infoList->is_empty()) {
-    infoList->push(os::strdup((const char*)buf, mtInternal));
+    infoList->push(buf);
   } else {
-    infoList->at_put(infoList->length() - 1, os::strdup((const char*)buf, mtInternal));
+    infoList->at_put(infoList->length() - 1, buf);
   }
   return true;
 }
@@ -787,13 +788,13 @@ DwarfFile::CompilationUnit* DwarfFile::get_compilation_unit(DebuggingInfoEntry* 
       DWARF_LOG_ERROR("Failed to find .debug_info offset for the compilation unit.");
       return nullptr;
     }
-    static CompilationUnit compilation_unit(newDie->_dwarf_file, compilation_unit_offset);
-    if (!compilation_unit.read_header()) {
+    CompilationUnit* compilation_unit = new CompilationUnit(newDie->_dwarf_file, compilation_unit_offset);
+    if (!compilation_unit->read_header()) {
       DWARF_LOG_ERROR("Failed to read header for the compilation unit.");
       return nullptr;
     }
-    compilation_unit._die_offset = offset;
-    return &compilation_unit;
+    compilation_unit->_die_offset = offset;
+    return compilation_unit;
   }
 }
 
@@ -1278,17 +1279,19 @@ bool DwarfFile::DebuggingInfoEntry::get_inlined_info(const uint32_t offset_in_li
     line_number_program.get_filename_from_header(subDie->_AT_call_file->value, filename, sizeof(filename));
     DWARF_LOG_INFO("File name: %s, line number:" UINT64_FORMAT, filename, subDie->_AT_call_line->value);
 
-    char buf[buflen] = "";
+    char* buf = NEW_RESOURCE_ARRAY(char, buflen);
     if (!infoList->is_empty()) {
       strcpy(buf, infoList->top());
+    } else {
+      strcpy(buf, "");
     }
     char str[buflen + 1];
     jio_snprintf(str, buflen + 1, "  (%s:" UINT64_FORMAT ")", filename, subDie->_AT_call_line->value);
     write_source_info_buf(buf, buflen, str);
     if (infoList->is_empty()) {
-      infoList->push(os::strdup((const char*)buf, mtInternal));
+      infoList->push(buf);
     } else {
-      infoList->at_put(infoList->length() - 1, os::strdup((const char*)buf, mtInternal));
+      infoList->at_put(infoList->length() - 1, buf);
     }
   }
 
@@ -1303,7 +1306,8 @@ bool DwarfFile::DebuggingInfoEntry::get_inlined_info(const uint32_t offset_in_li
   if (newDie->_AT_name != nullptr) {
     DWARF_LOG_INFO("Function name: %s", newDie->_AT_name->string);//获取name .debugstr
     if (!first) {
-      char buf[buflen] = "";
+      char* buf = NEW_RESOURCE_ARRAY(char, buflen);
+      strcpy(buf, "");
       // Get the class name of function.
       bool has_class = newDie->get_parent() && newDie->_parent->_tag == DW_TAG_class_type;
       char str[buflen + 1];

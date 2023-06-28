@@ -567,7 +567,7 @@ class DwarfFile : public ElfFile {
 
   // (3a-b) The compilation unit is read from the .debug_info section. The structure of .debug_info is shown in the
   // comments of class DebugAbbrev.
-  class CompilationUnit {
+  class CompilationUnit : public ResourceObj {
 
     // The header is defined in section 7.5.1.1 of the DWARF 4 spec.
     struct CompilationUnitHeader {
