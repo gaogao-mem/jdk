@@ -449,17 +449,27 @@ void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool pri
     const int limit = max_frames == -1 ? StackPrintLimit : MIN2(max_frames, (int)StackPrintLimit);
     int count = 0;
     while (count++ < limit) {
-      fr.print_on_error(st, buf, buf_size);
       if (fr.pc()) { // print source file and line, if available
-        char filename[128];
-        int line_no;
-        if (count == 1 && _lineno != 0) {
-          // We have source information of the first frame for internal errors. There is no need to parse it from the symbols.
-          st->print("  (%s:%d)", get_filename_only(), _lineno);
-        } else if (print_source_info &&
-                   Decoder::get_source_info(fr.pc(), filename, sizeof(filename), &line_no, count != 1)) {
-          st->print("  (%s:%d)", filename, line_no);
+        GrowableArrayCHeap<char*, mtInternal> infoList(3);
+        ResourceMark rm;
+        if (print_source_info &&
+                   Decoder::get_source_info(fr.pc(), &infoList, 256, count != 1)) {
+          // Get the information of lib and offset. eg. V  [libjvm.so+0x1980e3d]
+          stringStream ss;
+          fr.print_C_frame_prefix(&ss, buf, buf_size, fr.pc());
+          // We get the inline stack information from top to bottom via get_source_info, but we should print it reversely.
+          for (int i = infoList.length() - 1; i > 0; i--) {
+            st->print_cr("%s%s  [inline]", ss.as_string(), infoList.at(i));
+          }
+          fr.print_C_frame(st, buf, buf_size, fr.pc());
+          if (infoList.length() > 0) {
+            st->print("%s", infoList.at(0));
+          }
+        } else {
+          fr.print_on_error(st, buf, buf_size);
         }
+      } else {
+        fr.print_on_error(st, buf, buf_size);
       }
       st->cr();
       fr = next_frame(fr, t);

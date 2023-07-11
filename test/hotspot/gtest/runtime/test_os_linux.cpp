@@ -440,50 +440,55 @@ TEST(os_linux, addr_to_function_valid) {
 #if !defined(__clang_major__) || (__clang_major__ >= 5) // DWARF does not support Clang versions older than 5.0.
 // Test valid address of method ReportJNIFatalError in jniCheck.hpp. We should get "jniCheck.hpp" in the buffer and a valid line number.
 TEST_VM(os_linux, decoder_get_source_info_valid) {
-  char buf[128] = "";
   int line = -1;
   address valid_function_pointer = (address)ReportJNIFatalError;
-  ASSERT_TRUE(Decoder::get_source_info(valid_function_pointer, buf, sizeof(buf), &line));
+  GrowableArrayCHeap<char*, mtInternal>* infoList = new GrowableArrayCHeap<char*, mtInternal>(3);
+  ResourceMark rm;
+  ASSERT_TRUE(Decoder::get_source_info(valid_function_pointer, infoList, 1024, false));
+  ASSERT_TRUE(!infoList->is_empty());
+  char* buf = infoList->pop();
+  char *p = strrchr(buf, '(');
+  ASSERT_TRUE(p != nullptr);
+  char *q = strrchr(p, ':');
+  ASSERT_TRUE(q != nullptr);
+  jio_snprintf(buf, q - p, p + 1);
+  q[strlen(q) - 2] = '\0';
+  line = atoi(q + 1);
   ASSERT_TRUE(strcmp(buf, "jniCheck.hpp") == 0);
   ASSERT_TRUE(line > 0);
 }
 
-// Test invalid addresses. Should not cause harm and output buffer and line must contain "" and -1, respectively.
+// Test invalid addresses. Should not cause harm and output info list must be empty.
 TEST_VM(os_linux, decoder_get_source_info_invalid) {
-  char buf[128] = "";
   int line = -1;
   address invalid_function_pointers[] = { nullptr, (address)1, (address)&line };
 
   for (address addr : invalid_function_pointers) {
-    strcpy(buf, "somestring");
-    line = 12;
+    GrowableArrayCHeap<char*, mtInternal>* infoList = new GrowableArrayCHeap<char*, mtInternal>(3);
+    ResourceMark rm;
     // We should return false but do not crash or fail in any way.
-    ASSERT_FALSE(Decoder::get_source_info(addr, buf, sizeof(buf), &line));
-    ASSERT_TRUE(buf[0] == '\0'); // Should contain "" on error
-    ASSERT_TRUE(line == -1); // Should contain -1 on error
+    ASSERT_FALSE(Decoder::get_source_info(addr, infoList, 1024, false));
+    ASSERT_TRUE(infoList->is_empty()); // Should contain "" on error
   }
 }
 
-// Test with valid address but a too small buffer to store the entire filename. Should find generic <OVERFLOW> message
-// and a valid line number.
+// Test with valid address but a too small buffer to store the entire message. Should find generic <OVERFLOW> message
 TEST_VM(os_linux, decoder_get_source_info_valid_overflow) {
-  char buf[11] = "";
-  int line = -1;
   address valid_function_pointer = (address)ReportJNIFatalError;
-  ASSERT_TRUE(Decoder::get_source_info(valid_function_pointer, buf, 11, &line));
-  ASSERT_TRUE(strcmp(buf, "<OVERFLOW>") == 0);
-  ASSERT_TRUE(line > 0);
+  GrowableArrayCHeap<char*, mtInternal>* infoList = new GrowableArrayCHeap<char*, mtInternal>(3);
+  ResourceMark rm;
+  ASSERT_TRUE(Decoder::get_source_info(valid_function_pointer, infoList, 11, false));
+  ASSERT_TRUE(strcmp(infoList->pop(), "<OVERFLOW>") == 0);
 }
 
-// Test with valid address but a too small buffer that can neither store the entire filename nor the generic <OVERFLOW>
-// message. We should find "L" as filename and a valid line number.
+// Test with valid address but a too small buffer that can neither store the entire message nor the generic <OVERFLOW>
+// message. We should find "L".
 TEST_VM(os_linux, decoder_get_source_info_valid_overflow_minimal) {
-  char buf[2] = "";
-  int line = -1;
   address valid_function_pointer = (address)ReportJNIFatalError;
-  ASSERT_TRUE(Decoder::get_source_info(valid_function_pointer, buf, 2, &line));
-  ASSERT_TRUE(strcmp(buf, "L") == 0); // Overflow message does not fit, so we fall back to "L:line_number"
-  ASSERT_TRUE(line > 0); // Line should correctly be found and returned
+  GrowableArrayCHeap<char*, mtInternal>* infoList = new GrowableArrayCHeap<char*, mtInternal>(3);
+  ResourceMark rm;
+  ASSERT_TRUE(Decoder::get_source_info(valid_function_pointer, infoList, 2, false));
+  ASSERT_TRUE(strcmp(infoList->pop(), "L") == 0); // Overflow message does not fit, so we fall back to "L:line_number"
 }
 #endif // clang
 

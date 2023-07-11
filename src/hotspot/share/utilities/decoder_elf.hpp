@@ -29,6 +29,7 @@
 
 #include "utilities/decoder.hpp"
 #include "utilities/elfFile.hpp"
+#include "utilities/growableArray.hpp"
 
 class ElfDecoder : public AbstractDecoder {
 
@@ -43,7 +44,7 @@ public:
     ShouldNotReachHere();
     return false;
   }
-  bool get_source_info(address pc, char* buf, size_t buflen, int* line, bool is_pc_after_call);
+  bool get_source_info(address pc, GrowableArrayCHeap<char*, mtInternal>* infoList, size_t buflen, bool is_pc_after_call);
 
 private:
   ElfFile*         get_elf_file(const char* filepath);
